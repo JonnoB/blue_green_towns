@@ -1,0 +1,529 @@
+---
+title: "foi_processing"
+output: html_document
+date: "2022-09-02"
+editor_options: 
+  chunk_output_type: console
+---
+
+
+
+```{r}
+
+packages <- c("tidyverse" ,"readxl")
+
+new.packages <- packages[!(packages %in% installed.packages()[,"Package"])]
+if(length(new.packages)) install.packages(new.packages)
+
+lapply(packages, library, character.only = TRUE)
+
+data_folder <- "./data"
+dropbox_folder <- "/home/jonno/Dropbox/FOIs/Returns/JB to OK/"
+jb_cleared <-  "/home/jonno/Dropbox/FOIs/Returns/JB Cleared"
+
+documents_path <- file.path(data_folder, "ONSPD", "Documents") 
+foi_files <- "./data/FOI_files"
+
+list.files("./functions", full.names = T) %>%
+  walk(~source(.x))
+
+
+basecd <- "~/home/jonno/inspecting_the_laundromat"
+
+list.files(file.path(basecd, "functions"), full.names = T) %>%
+  walk(~source(.x))
+
+```
+
+
+
+#Test block
+
+This block allows me to check the incoming FOI's and reject or pass the results
+
+Derby dales is just a list of postcodes needs further investgigation
+Cardiff was in 3 times in apparently identical files. only the first has been used
+Wyre full address
+
+
+
+```{r}
+files_to_check <- list.files(dropbox_folder, full.names = T)
+file_number <- 4
+{
+
+  test_file <- process_foi_templates(files_to_check[file_number], council_tax_type = "Discount_Class", 
+                                     keep_classes = NULL,
+                                     full =  FALSE )
+  print(files_to_check[file_number])
+  print(table(test_file[,1]))
+  print(nrow(test_file))
+}
+
+```
+
+
+```{r}
+files_to_check
+```
+
+# create the data set
+
+This chunk allows me to make the processed FOI's ready for loading.
+
+Once they are processed the code is copied to the processing script
+
+## Load all files and extract codes
+
+
+I can use this to make a code map of council codes
+```{r}
+
+all_file_paths <- list.files(foi_files, full.names = T)
+
+#I need to create two output files 1 contains the code map
+#the other contains the list of files that are included in the map
+#When new files are added only they are added to the map database
+
+```
+
+
+```{r}
+
+target_foi <- file.path(foi_files, "ChichesterDiscountsLSOA.xlsx" ) 
+
+test <- process_foi_templates(file_path = target_foi, 
+                                  council_tax_type = "Discount_Class", 
+                                  keep_classes = NULL,
+                                  full = FALSE )
+
+#can use this to find the classes you want to keep
+dput(unique(test$Discount_Class))
+
+keep_classes =  dput(unique(test$Discount_Class))
+
+#allows change between Dicount_Class and Exemption_Class or nay other column name
+council_tax_type = "Discount_Class"
+
+test <- file.path(foi_files, "Test ValleyDiscountsLSOA.xlsx" ) %>%
+  read_xlsx(., sheet=1) %>%
+  select(1:4) %>%
+  filter(.data[[council_tax_type]] %in% keep_classes) %>%
+  group_by(LSOA_CODE) %>%
+  summarise(low_use = n())
+
+
+test2 <- process_foi_templates(file_path = target_foi, 
+                                  council_tax_type = "Discount_Class", 
+                                  keep_classes  )
+
+```
+
+
+
+# Create an empty dictionary
+
+This is a new approach to creating the dataset.
+I am going to create a dictionary that maps local authority names or codes to empty not empy
+This is a good idea as the coeds are basically the same across the whole country with a few special variations
+This means that the things that were used can be easily explained and also makes working with new data much faster
+
+
+The trick is to add to the dataset and NOT TO OVERWRITE IT!
+
+
+
+The file "Malvern & Wychavon MH-2022-30(1).xlsx" is postcodes and needs to be manually prepared into LSOA
+
+```{r}
+
+files_with_other_names <- c("Arun 22.09.02 Attachment 1 - Mingay - Aug22_36.xlsx")
+
+file_names <- c(list.files(jb_cleared,  pattern = "discount", ignore.case = T), files_with_other_names)
+
+all_codes <- file_names  %>% map_df(~{
+  
+   print(.x)
+  
+  temp <- read_xlsx(file.path(jb_cleared, .x)) 
+  
+ #not entirely sure why I have done this strange pull approach. I was worried about funny naming things, but all rather vague
+  tibble(code = temp %>% pull(1),
+         lsoa11cd = temp %>% pull(grep("lsoa", names(temp), ignore.case = TRUE)),
+         file_name = .x) 
+  })
+
+
+low_use_dict <- all_codes  %>% group_by(code) %>% summarise(count = n() ) %>%
+  arrange(-count) %>%
+  mutate(cumsum = cumsum(count),
+         cumperc = cumsum/sum(count),
+         low_use = case_when(
+           grepl("uninhab", code, ignore.case = T) ~ TRUE,
+           grepl("second", code, ignore.case = T) ~ TRUE,
+           grepl("2nd", code, ignore.case = T) ~ TRUE,
+           grepl("empty", code, ignore.case = T) ~ TRUE,
+           grepl("prem", code, ignore.case = T) ~ TRUE,
+           grepl("PCLA", code, ignore.case = T) ~ TRUE,
+           grepl("PCLB", code, ignore.case = T) ~ TRUE,
+           grepl("PCLC", code, ignore.case = T) ~ TRUE,
+           grepl("PCLD", code, ignore.case = T) ~ TRUE, #structural repairs
+           grepl("unfurn", code, ignore.case = T) ~ TRUE,
+           grepl("Class (A|C|B)", code, ignore.case = T) ~ TRUE,
+           grepl("major", code, ignore.case = T) ~ TRUE,
+           str_detect(code, "^(B|A|C|C1|C3|D|D6|L|L5|L10)$") ~TRUE,
+           grepl("LTE", code, ignore.case = T) ~ TRUE,
+           #not empty
+           grepl("single", code, ignore.case = T) ~ FALSE,
+           grepl("disabled", code, ignore.case = T) ~ FALSE,
+           grepl("disregard", code, ignore.case = T) ~ FALSE, #at least 1 person living in the house is not taxable
+           grepl("Annexe Discount", code, ignore.case = T) ~ FALSE,
+           grepl("care", code, ignore.case = T)~ FALSE,
+           grepl("vulnerable case", code, ignore.case = T)~FALSE,
+           grepl("SPD", code, ignore.case = T)~FALSE,
+           TRUE~NA
+         ))
+
+
+low_use_dict %>%
+  group_by(low_use) %>%
+  summarise(
+    counts = n(),
+    total = sum(count)) %>%
+  mutate(perc = total/sum(total))
+
+
+all_codes %>%
+  filter( grepl("care", code, ignore.case = T))
+
+
+```
+
+
+# Create the dataset
+
+
+This takes the all codes data frame filters to keep only low use codes, aggregates to lsoa level. Then the wards, LACD
+
+```{r}
+
+return_lookup_data <- function(folder_path, file_regex_pattern ){
+  
+  #get the path to the ward names lookup
+  lookup_path <-list.files(folder_path, 
+                           pattern = file_regex_pattern, 
+                           ignore.case = TRUE, 
+                           full.names = TRUE)
+  
+  lookup_df <- read_csv(lookup_path) 
+  
+  
+  
+  #Removes the years digits from the column names.
+  #The lookup tables have the year that the table codes were generated the name
+  #i.e. on the wardnames lookup from after the 2020 update 
+  #the column names will be "WD20CD" and "WD20NM",
+  #This Regex removes the numbers meaning that changes in years will not affect the process
+  #This makes the process more robust.
+  #However, if the ONS change the naming convention could cause an error
+  names(lookup_df) = gsub("\\d","",names(lookup_df))
+  
+  return(lookup_df)
+}
+
+
+wardnames_lookup <- return_lookup_data(documents_path, "^ward names.*(csv)" )
+
+region_lookup <- return_lookup_data(documents_path, "^region.*(csv)" ) %>%
+  select(1,3)
+
+LADNM_lookup <- return_lookup_data(documents_path, "^la_ua.*(csv)" ) %>%
+  select(1:2)
+
+ONSPD_df <- read_csv(file.path("/home/jonno/blue_green_towns/data/ONSPD/Data","ONSPD_NOV_2021_UK.csv")) %>%
+  select(lsoa11cd = lsoa11,
+         MSOACD = msoa11, oslaua,
+         OA11CD = oa11, Country_code = ctry,
+         RGNCD =  rgn,
+         WDCD = osward) %>%
+  #there are no postcodes so the dataset can be simplified by removing duplicates
+  distinct() %>%
+    left_join(., region_lookup, by = "RGNCD") %>%
+  #  left_join(wardnames_lookup, by = "WDCD") %>%
+    left_join(LADNM_lookup, by = c("oslaua"= "LADCD")) %>%
+    #filter(Country_code == "W92000004")
+    select(Country_code, Admin_district_code = oslaua, 
+           #Admin_ward_code = WDCD, 
+           lsoa11cd, MSOACD, LADNM, 
+           RGNCD, RGNNM
+           #, WD16NM = WDNM
+           ) %>%
+    mutate(
+      #Make sure Scotland and Wales have region names
+      RGNCD = case_when(
+        grepl("W", Country_code) ~"Wales",
+        grepl("S", Country_code) ~"Scotland",
+        TRUE ~ RGNCD),
+      RGNNM = case_when(
+        grepl("W", Country_code) ~"Wales",
+        grepl("S", Country_code) ~"Scotland",
+        TRUE ~ RGNNM
+      )) %>%
+    filter(!is.na(RGNNM),
+           LADNM != "NA",
+           RGNCD !="Scotland") %>%
+  distinct()
+```
+
+```{r}
+
+all_low_use_data <- all_codes %>%
+  left_join( low_use_dict) %>%
+  filter(low_use) %>%
+  group_by(lsoa11cd) %>%
+  summarise(low_use = n()) %>%
+  #load the council tax household counts
+  left_join( read_xlsx(file.path(data_folder, "CTSOP1.1_2021.xlsx"), sheet = 3, skip = 4 ) %>%
+  select(lsoa11cd = ecode, all_properties) ) %>%
+  mutate(low_use_ratio = low_use/all_properties,
+         homes = all_properties - low_use) %>%
+  left_join(., ONSPD_df %>%
+  distinct()) %>%
+  filter(complete.cases(.))
+
+# unique(all_low_use_data$Admin_district_code) %>%
+#   walk(~{
+#     
+#     temp = all_low_use_data %>%
+#       filter(Admin_district_code ==.x) 
+#     
+#     file_name = paste(temp$LADNM[1], paste0(.x, ".csv"))
+#     write_csv(temp, file= file.path(data_folder, "low_use_LAD_files", file_name))
+#     
+#   })
+
+
+```
+
+```{r}
+
+```
+
+
+```{r}
+all_low_use_data %>%
+  group_by(LADNM) %>%
+  summarise(low_use = sum(low_use))
+
+
+all_low_use_data %>%
+  group_by(RGNNM) %>%
+  summarise(low_use = sum(low_use))
+```
+
+
+```{r}
+
+all_vars_monte <- c("low_use", "airbnb", "offshore", "unconventional", "unconventional_overlapped") %>% map(~{
+  
+  file_path <- file.path(data_folder, "samples_by_type", paste0(.x, ".csv"))
+  
+  if(file.exists(file_path)){
+    print("already exists loading file")
+    temp <- read_rds(file_path)
+    
+  } else{
+    
+    temp <- all_variables %>%
+      mutate(non_target = homes-.data[[.x]]) %>%
+      monte_carlo_stratified_dataset(.,c("non_target", .x), prices, 501, geography_name = "MSOA11CD")
+    
+    write_rds(temp, file_path)
+  }
+  
+  return(temp)
+  
+})
+```
+
+
+```{r}
+
+postcode_df <- read_csv(file.path("/home/jonno/blue_green_towns/data/ONSPD/Data","ONSPD_NOV_2021_UK.csv")) %>%
+  select(pcd, lsoa11cd = lsoa11,
+         MSOACD = msoa11, oslaua) %>%
+  mutate(pcd =  gsub(" ", "", pcd))
+
+prices <- list.files(file.path("/home/jonno/inspecting_the_laundromat/data", "price_paid_files"), full.names = T) %>%
+  map_df(~{
+    prices <- read_csv(.x, col_names = FALSE ) %>%
+    filter(X5 %in% c("D", "S", "T", "F")) %>%
+      select(sales_price = X2, pcd = X4)
+    
+  })  %>% #The property types, filtering here greatly reduces the size of the vector
+    mutate(pcd = gsub(" ", "", pcd))  %>%
+    left_join(., postcode_df,
+              by ="pcd")
+
+#for weigthed average this is all that is needed
+MSOA_mean_prices = prices %>%
+  group_by(MSOACD) %>%
+  summarise(mean_price = mean(sales_price, na.rm = TRUE))
+
+
+rm(postcode_df)
+```
+
+
+# get mean prices
+
+```{r}
+MSOA_mean_data <- all_low_use_data %>%
+  group_by(MSOACD, Admin_district_code, LADNM, RGNCD, RGNNM, Country_code) %>%
+  summarise(low_use = sum(low_use, na.rm = TRUE),
+            all_properties = sum(all_properties, na.rm = TRUE),
+            homes = sum(homes, na.rm = TRUE)) %>%
+  left_join(MSOA_mean_prices) %>%
+  group_by(LADNM) %>%
+  #the highest rank fract is the highest number
+  #so the MSOA with the most Low-use properties has rank 1
+  #likewise the MSOA with the highest mean price has rank 1
+  mutate(low_use_rank = rank(low_use)/n(),
+         price_rank = rank(mean_price)/n())
+
+ggplot(data = MSOA_mean_data, aes(x = low_use_rank, y = price_rank  )) +geom_point()
+
+
+weighted_mean_price <- MSOA_mean_data %>%
+  group_by(Admin_district_code, LADNM, RGNCD, RGNNM, Country_code) %>%
+  summarise(
+    low_use_price = weighted.mean(mean_price, low_use),
+            all_properties_price = weighted.mean(mean_price, all_properties),
+            homes_price = weighted.mean(mean_price, homes),
+           low_use = sum(low_use),
+            all_properties = sum(all_properties),
+    homes = sum(homes),
+    .groups = 'drop') %>%
+  mutate(ratio_LU_homes_price = low_use_price/homes_price,
+         ratio_LU_homes = low_use/homes)
+
+
+ggplot(data = weighted_mean_price, aes(x = ratio_LU_homes , y = ratio_LU_homes_price)) + geom_point()
+
+```
+
+
+
+```{r}
+
+LADS <- unique(all_low_use_data$Admin_district_code)
+
+.x <-  LADS[1]
+
+LAD_low_use_temp <- all_low_use_data %>%
+  filter(Admin_district_code==.x ) %>%
+  rename(counts = low_use) %>%
+  mutate(class_code = 'low_use',
+         class = "low_use")
+
+prices_temp <- prices %>%
+  filter(oslaua ==  .x ) 
+
+      start_time <- Sys.time()
+      sample_df <- aggregated_monte_carlo_dt( df2 = LAD_low_use_temp, prices_temp, 
+                                              number_instances = 501, geography_name = "MSOACD") %>%
+        mutate(LAD11CD = .x)
+      end_time <- Sys.time()
+
+      
+geography_counts <- df2 %>%
+    rename(smallest_unit = {{geography_name}}) %>%
+    group_by(smallest_unit) %>%
+    summarise(total = sum(counts)) 
+      
+```
+
+
+```{r}
+aggregated_monte_carlo_dt <- function(df2, prices2, number_instances = 501, geography_name){
+  
+  geography_counts <- df2 %>%
+    rename(smallest_unit = {{geography_name}}) %>%
+    group_by(smallest_unit) %>%
+    summarise(total = sum(counts)) 
+  
+  #geographic units
+  number_geographic_units <- nrow(geography_counts)
+  #this produces a vector of the sample ID's where each element represents one instance of one geographic unit in the dataset
+  #therefore a dataset of 5  geographic units and 10 instances, there will be the numbers 1:10 a total of 5 times
+  sample_id_vect <- rep(1:number_instances, times = number_geographic_units)
+  
+  #create a vector where each element is the number of samples in each unit repeated for the total number of instances
+  #that will be generated
+  #This means if there are two geographic units one contains 100 samples and one contains 80 samples and there are 3 instances
+  #then the vector will be c(100, 100, 100, 80, 80,80)
+  sample_instances_vect <- rep(geography_counts$total, each = number_instances)
+  
+  #each unique value in this vector identifies one instance
+  #each instance has as many elements as the total length of the data.
+  #This means if there are two geographic units one contains 100 samples and one contains 80 samples and there are 3 instances
+  #there will be a  180 ones, 180 twos and 180 threes.The numbers will appear such that there are 100 ones followed by
+  #100 twos, followed by 100 threes, followed by 80 ones, followed by 80 twos followed by 80 threes
+  instance_id_vect <- rep(sample_id_vect, times = sample_instances_vect)
+  
+  #small example of the above
+  #rep(rep(1:5, times = 2), times = rep(c(2, 3), each = 5))
+  
+  unit_id <-unique(df2[[geography_name]])
+  
+  #this is a bit of an ugly way to generate a vector where each element represents the class.
+  #the classes repeat every n elements where n is the number of samples of all classes in that unit. 
+  #for each instance the numbers of each class are repeated m times where m is the number of observations of that
+  #class in that unit.
+  #It may be ugly but it is not very slow so I don't care
+  unit_id_vect <- 1:length(unit_id) %>%
+    map(~{
+      per_unit_df <- df2[df2[[geography_name]]== unit_id[.x],]
+      #generate the class code vectors
+      out <- 1:nrow(per_unit_df) %>% map(~rep(per_unit_df$class_code[.x], each = per_unit_df$counts[.x])) %>% unlist %>%
+        rep(., times = number_instances)
+      
+    }) %>% unlist
+  
+  print("Creating Monte-Carlo simulations")
+  sampled_vect <- create_sampled_vector(geography_counts, prices2, samples = number_instances, geography_name )
+  
+  class_dict <- df2 %>% select(class, class_code) %>% distinct()
+  
+  print("summarising monte-carlo")
+  
+  #These are very large aggregations, so data.table is used
+  data_to_summarise_df <- data.table(sampled_vect, instance_id_vect, unit_id_vect)
+  
+  #first create the averages for all groups
+  #IS THIS NOT A WEIGHTED AVERAGE????????????????
+  total_summary_df <- data_to_summarise_df[, mean(sampled_vect), keyby = instance_id_vect][,"V1"] %>%
+    as_tibble(.) %>%
+    rename(total = V1)
+  
+  #then create the averages for the sub-groups
+  out <-1:nrow(class_dict) %>%
+    map(~{
+      #find the mean for each instance for each of the sub-groups
+      data_to_summarise_df[unit_id_vect == .x][, mean(sampled_vect), keyby = instance_id_vect][,"V1"] %>%
+        as_tibble(.) %>%
+        rename(!!sym(class_dict$class[.x]) :=V1)
+      
+    }) %>% 
+    #glue it all together and rename ready for output
+    bind_cols() %>%
+    bind_cols(total_summary_df, .) %>%
+    mutate(id = 1:n()) %>%
+    select(id, everything())
+  
+  return(out)
+  
+}
+
+```
+
