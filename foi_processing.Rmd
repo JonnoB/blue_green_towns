@@ -20,7 +20,7 @@ lapply(packages, library, character.only = TRUE)
 data_folder <- "./data"
 dropbox_folder <- "/home/jonno/Dropbox/FOIs/Returns/JB to OK/"
 jb_cleared <-  "/home/jonno/Dropbox/FOIs/Returns/JB Cleared"
-
+original_empty_homes_folder <- '/home/jonno/blue_green_towns/data/original_empty_homes'
 documents_path <- file.path(data_folder, "ONSPD", "Documents") 
 foi_files <- "./data/FOI_files"
 
@@ -48,8 +48,10 @@ Wyre full address
 
 
 ```{r}
+
+#files_to_check <- list.files("/home/jonno/Dropbox/FOIs/Returns/JB Rejects", full.names = T)
 files_to_check <- list.files(dropbox_folder, full.names = T)
-file_number <- 4
+file_number <- 16
 {
 
   test_file <- process_foi_templates(files_to_check[file_number], council_tax_type = "Discount_Class", 
@@ -135,22 +137,43 @@ The trick is to add to the dataset and NOT TO OVERWRITE IT!
 
 The file "Malvern & Wychavon MH-2022-30(1).xlsx" is postcodes and needs to be manually prepared into LSOA
 
+
+
+Wrexham and Powys had what I would class as empty homes in the exemptions file. these were moved over whilst the other classes in the exemptions folder were ignored
+
 ```{r}
 
-files_with_other_names <- c("Arun 22.09.02 Attachment 1 - Mingay - Aug22_36.xlsx")
+#Check that all files are either discount or exemption and all are xlsx
+test <- tibble(file_names  = list.files(jb_cleared)) %>%
+  mutate(discount = grepl("discount", file_names, ignore.case = T),
+         exemption = grepl("exemp", file_names, ignore.case = T),
+         either = discount | exemption,
+         xlsx = grepl("xlsx", file_names, ignore.case = T))
+```
 
-file_names <- c(list.files(jb_cleared,  pattern = "discount", ignore.case = T), files_with_other_names)
+```{r}
+
+#files_with_other_names <- c("Arun 22.09.02 Attachment 1 - Mingay - Aug22_36.xlsx")
+
+file_names <- c(list.files(jb_cleared,  pattern = "discount", ignore.case = T, full.names = T), 
+            #    files_with_other_names,
+                list.files(original_empty_homes_folder, ignore.case = T, recursive = T, full.names = T))
 
 all_codes <- file_names  %>% map_df(~{
   
    print(.x)
   
-  temp <- read_xlsx(file.path(jb_cleared, .x)) 
+  temp <- read_xlsx( .x) 
+  #temp <- read_xlsx(file.path(jb_cleared, .x)) 
   
  #not entirely sure why I have done this strange pull approach. I was worried about funny naming things, but all rather vague
   tibble(code = temp %>% pull(1),
          lsoa11cd = temp %>% pull(grep("lsoa", names(temp), ignore.case = TRUE)),
-         file_name = .x) 
+         file_name = .x,
+         type = case_when(
+           basename(dirname(file_name)) =="JB Cleared"~"BG",
+           TRUE ~"Original"
+         )) 
   })
 
 
@@ -159,8 +182,9 @@ low_use_dict <- all_codes  %>% group_by(code) %>% summarise(count = n() ) %>%
   mutate(cumsum = cumsum(count),
          cumperc = cumsum/sum(count),
          low_use = case_when(
-           grepl("uninhab", code, ignore.case = T) ~ TRUE,
-           grepl("second", code, ignore.case = T) ~ TRUE,
+           grepl("^exempt", code, ignore.case = T) ~ FALSE,
+           grepl("uninhab|unihab", code, ignore.case = T) ~ TRUE, #misspelling found
+           grepl("second|holiday|Not main Residence", code, ignore.case = T) ~ TRUE,
            grepl("2nd", code, ignore.case = T) ~ TRUE,
            grepl("empty", code, ignore.case = T) ~ TRUE,
            grepl("prem", code, ignore.case = T) ~ TRUE,
@@ -171,18 +195,32 @@ low_use_dict <- all_codes  %>% group_by(code) %>% summarise(count = n() ) %>%
            grepl("unfurn", code, ignore.case = T) ~ TRUE,
            grepl("Class (A|C|B)", code, ignore.case = T) ~ TRUE,
            grepl("major", code, ignore.case = T) ~ TRUE,
-           str_detect(code, "^(B|A|C|C1|C3|D|D6|L|L5|L10)$") ~TRUE,
-           grepl("LTE", code, ignore.case = T) ~ TRUE,
+           grepl("vacant", code, ignore.case = T) ~ TRUE,
+           str_detect(code, "^(B|BE|A|AE|C|C1|C2|C3|CE|CU|C2017|D|D6|L|L5|L10)$") ~TRUE,
+           str_detect(code, "^C1MTH$") ~TRUE,
+           grepl("LTE", code, ignore.case = T) ~ TRUE, 
+           grepl("Prescribed Class D", code, ignore.case = T) ~ TRUE,
+           grepl("Standard Empty", code, ignore.case = T) ~ TRUE,
+           grepl("Unoccupied|Unnocupied|Zero Occupancy|zero", code, ignore.case = T) ~ TRUE,
+           grepl("LEVY", code, ignore.case = T) ~ TRUE,
+           grepl("Unocc & Furn|unocc furn", code, ignore.case = T) ~ TRUE,
            #not empty
            grepl("single", code, ignore.case = T) ~ FALSE,
            grepl("disabled", code, ignore.case = T) ~ FALSE,
+           grepl("mentally", code, ignore.case = T) ~ FALSE,
            grepl("disregard", code, ignore.case = T) ~ FALSE, #at least 1 person living in the house is not taxable
            grepl("Annexe Discount", code, ignore.case = T) ~ FALSE,
            grepl("care", code, ignore.case = T)~ FALSE,
            grepl("vulnerable case", code, ignore.case = T)~FALSE,
            grepl("SPD", code, ignore.case = T)~FALSE,
+           grepl("Exempt", code, ignore.case = T)~FALSE,
+           grepl("^STUD$", code, ignore.case = T)~FALSE,
+           grepl("student", code, ignore.case = T) ~ FALSE,
+           grepl("nurs", code, ignore.case = T) ~ FALSE,
+           grepl("repair", code, ignore.case = T) ~ FALSE,
            TRUE~NA
-         ))
+         )) %>%
+  arrange(-low_use,-count)
 
 
 low_use_dict %>%
@@ -193,17 +231,21 @@ low_use_dict %>%
   mutate(perc = total/sum(total))
 
 
+low_use_dict %>%
+  filter(grepl("not main", code, ignore.case = T))
+
 all_codes %>%
-  filter( grepl("care", code, ignore.case = T))
+  filter( grepl("^CU$", code, ignore.case = T))
 
 
 ```
 
 
+
 # Create the dataset
 
 
-This takes the all codes data frame filters to keep only low use codes, aggregates to lsoa level. Then the wards, LACD
+This takes the all codes data frame filters to keep only low use codes, aggregates to lsoa level. Then the wards, LADCD
 
 ```{r}
 
@@ -274,6 +316,27 @@ ONSPD_df <- read_csv(file.path("/home/jonno/blue_green_towns/data/ONSPD/Data","O
            RGNCD !="Scotland") %>%
   distinct()
 ```
+ 
+#Missing data
+
+Some of the LADs seem to have dissappeared. However it seems that acrtually several LAD's have been rolled into one. There are some strange things though. Blaenau Gwent seems to be missing some LSOA. I don't know if this is due to an out of date ONSPD or what. wierd since they should be from the same source.
+
+The Havering data is also wrong, they seem to have deleted the LSOA and just put "havering" in. This is obcviously quite annoying and needs to be fixed and I only have the data at ward level. It is not the end of the world but I think it is importance for completeness
+
+There are 8000 NA's aka postcodes for which an LSOA could not be found.
+```{r}
+
+#What areas are missing?
+test <- all_codes %>%
+  left_join( low_use_dict) %>%
+  filter(low_use) %>%
+  group_by(lsoa11cd) %>%
+  summarise(low_use = n(),
+            type = first(type)) %>%
+  left_join(., ONSPD_df ) %>%
+  filter(!complete.cases(.))
+```
+
 
 ```{r}
 
@@ -281,7 +344,8 @@ all_low_use_data <- all_codes %>%
   left_join( low_use_dict) %>%
   filter(low_use) %>%
   group_by(lsoa11cd) %>%
-  summarise(low_use = n()) %>%
+  summarise(low_use = n(),
+            type = first(type)) %>%
   #load the council tax household counts
   left_join( read_xlsx(file.path(data_folder, "CTSOP1.1_2021.xlsx"), sheet = 3, skip = 4 ) %>%
   select(lsoa11cd = ecode, all_properties) ) %>%
@@ -291,23 +355,27 @@ all_low_use_data <- all_codes %>%
   distinct()) %>%
   filter(complete.cases(.))
 
-# unique(all_low_use_data$Admin_district_code) %>%
-#   walk(~{
-#     
-#     temp = all_low_use_data %>%
-#       filter(Admin_district_code ==.x) 
-#     
-#     file_name = paste(temp$LADNM[1], paste0(.x, ".csv"))
-#     write_csv(temp, file= file.path(data_folder, "low_use_LAD_files", file_name))
-#     
-#   })
+
+##
+## The below saves all the data to a file for each LAD
+## It is commented out to prevent overwrite but is so fast it probably doesn't matter
+##
+
+unique(all_low_use_data$Admin_district_code) %>%
+  walk(~{
+
+    temp = all_low_use_data %>%
+      filter(Admin_district_code ==.x)
+
+    type_folder = ifelse(temp$type[1]=="BG", "low_use_LAD_files", "low_use_LAD_files_bourne")
+    file_name = paste(temp$LADNM[1], paste0(.x, ".csv"))
+    write_csv(temp, file= file.path(data_folder,type_folder , file_name))
+
+  })
 
 
 ```
 
-```{r}
-
-```
 
 
 ```{r}
@@ -321,31 +389,7 @@ all_low_use_data %>%
   summarise(low_use = sum(low_use))
 ```
 
-
-```{r}
-
-all_vars_monte <- c("low_use", "airbnb", "offshore", "unconventional", "unconventional_overlapped") %>% map(~{
-  
-  file_path <- file.path(data_folder, "samples_by_type", paste0(.x, ".csv"))
-  
-  if(file.exists(file_path)){
-    print("already exists loading file")
-    temp <- read_rds(file_path)
-    
-  } else{
-    
-    temp <- all_variables %>%
-      mutate(non_target = homes-.data[[.x]]) %>%
-      monte_carlo_stratified_dataset(.,c("non_target", .x), prices, 501, geography_name = "MSOA11CD")
-    
-    write_rds(temp, file_path)
-  }
-  
-  return(temp)
-  
-})
-```
-
+#Load price paid dataset
 
 ```{r}
 
@@ -375,11 +419,13 @@ rm(postcode_df)
 ```
 
 
-# get mean prices
+# Combine prices and low use data
 
 ```{r}
+
+#Get the mean price at MSOA level
 MSOA_mean_data <- all_low_use_data %>%
-  group_by(MSOACD, Admin_district_code, LADNM, RGNCD, RGNNM, Country_code) %>%
+  group_by(MSOACD, Admin_district_code, LADNM, RGNCD, RGNNM, Country_code, type) %>%
   summarise(low_use = sum(low_use, na.rm = TRUE),
             all_properties = sum(all_properties, na.rm = TRUE),
             homes = sum(homes, na.rm = TRUE)) %>%
@@ -391,11 +437,9 @@ MSOA_mean_data <- all_low_use_data %>%
   mutate(low_use_rank = rank(low_use)/n(),
          price_rank = rank(mean_price)/n())
 
-ggplot(data = MSOA_mean_data, aes(x = low_use_rank, y = price_rank  )) +geom_point()
-
-
+#The mean price of homes and empty homes by lad
 weighted_mean_price <- MSOA_mean_data %>%
-  group_by(Admin_district_code, LADNM, RGNCD, RGNNM, Country_code) %>%
+  group_by(Admin_district_code, LADNM, RGNCD, RGNNM, Country_code, type) %>%
   summarise(
     low_use_price = weighted.mean(mean_price, low_use),
             all_properties_price = weighted.mean(mean_price, all_properties),
@@ -407,6 +451,8 @@ weighted_mean_price <- MSOA_mean_data %>%
   mutate(ratio_LU_homes_price = low_use_price/homes_price,
          ratio_LU_homes = low_use/homes)
 
+
+#write_csv(weighted_mean_price, file.path(data_folder, "LAD_summary.csv"))
 
 ggplot(data = weighted_mean_price, aes(x = ratio_LU_homes , y = ratio_LU_homes_price)) + geom_point()
 
@@ -525,5 +571,57 @@ aggregated_monte_carlo_dt <- function(df2, prices2, number_instances = 501, geog
   
 }
 
+```
+
+
+#Special Cleaning
+
+Some areas sent back weird things this is where special cleaning takes place
+
+## Westninster
+
+```{r}
+#Westminster council tax are just jerks and make everything as difficult as possible
+
+lsoa_names_df <-read_csv(file.path(data_folder, "Lower_Layer_Super_Output_Areas_(December_2011)_Names_and_Codes_in_England_and_Wales.csv"))
+
+westminster_df <- read_xlsx(file.path(data_folder, "original_collection_needs_work", "Westminster 3123133  data Aug 2017.xlsx"), .name_repair = "universal") %>%
+  select(Discount_Type = Current.Discount, LSOA11NM = LSOA) %>% left_join(lsoa_names_df ) %>%
+  select(Discount_Type, LSOA_CODE  = LSOA11CD ) %>%
+  filter(complete.cases(.)) %>%
+  write_csv(file.path(data_folder,  "original_collection_needs_work", "Westminster_discounts.csv"))
+```
+
+
+
+##Haringay
+
+Haringay has put counts per postcode on each row
+```{r}
+
+haringary_df <- read_xlsx(file.path(data_folder, 
+                                    "original_collection_needs_work", "Haringey_Discounts_LSOA_temp.xlsx"),
+                          .name_repair = "universal") %>%
+  uncount(weights = Count.of.Exemptions.by.Post.Code) %>%
+  select(Discount_Type = Exemption...Discount.type,
+         LSOA_CODE) %>%
+  write_csv(file.path(data_folder, 
+                                    "original_collection_needs_work", "Haringey_Discounts_LSOA.csv"))
+
+```
+
+##Craven
+
+```{r}
+craven_df <- read_xlsx(file.path(data_folder, 
+                                    "original_collection_needs_work", "Craven Discounts raw.xlsx"),
+                          .name_repair = "universal") %>%
+  mutate(Postcode =  str_split(craven_df$Full.Property.Address, ',') %>%
+  map_chr(~{
+    .x[length(.x)]
+  }) %>% str_trim()
+  ) %>%
+  write_csv(file.path(data_folder, 
+                                    "original_collection_needs_work", "Craven Discounts.csv"))
 ```
 
