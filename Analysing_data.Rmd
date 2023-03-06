@@ -1,0 +1,93 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-03-04"
+editor_options: 
+  chunk_output_type: console
+---
+
+
+
+```{r}
+library(tidyverse)
+
+```
+
+
+
+```{r}
+all_lad_codes_blue_green <- list.files(file.path(data_folder, "low_use_LAD_files")) %>%
+  str_extract(.,"[\\S]+$") %>% str_remove(., ".csv")
+
+all_lad_codes_bourne <- list.files(file.path(data_folder, "low_use_LAD_files_bourne")) %>%
+  str_extract(.,"[\\S]+$") %>% str_remove(., ".csv")
+
+LAD_sf <- read_sf(file.path(data_folder, "LAD_shapefiles")) %>%
+  mutate(type = case_when(
+    LAD22CD %in% all_lad_codes_blue_green ~"BG towns",
+    LAD22CD %in% all_lad_codes_bourne ~"Bourne 2019",
+    str_sub(LAD22CD, 1, 1)=="S" ~ "ScotGov",
+    TRUE ~ "No Data"
+  )) %>%
+  filter( str_sub(LAD22CD, 1, 1)!="N" )
+```
+
+
+
+```{r}
+
+blue_green <- list.files(file.path(data_folder, "low_use_LAD_files"), full.names = TRUE) %>%
+  map_df(~{
+    #print(.x)
+    read_csv(.x, col_types = c("c", "i", "f", "i", "d", "i", "f", "c", "c", "c", "f", "f", "c"))# %>%
+
+
+  })
+
+bourne_df <- list.files(file.path(data_folder, "low_use_LAD_files_bourne"), full.names = TRUE) %>%
+  map_df(~{
+    #print(.x)
+    read_csv(.x, col_types = c("c", "i", "f", "i", "d", "i", "f", "c", "c", "c", "f", "f", "c")) 
+
+  }) %>%
+  #remove any lsoa that are also in blue_gree, this ensures only newest kept
+  filter(!(lsoa11cd %in% blue_green$lsoa11cd))
+
+scotland_df <- list.files(file.path(data_folder, "scotland"), full.names = TRUE) %>%
+  map_df(~{
+    #print(.x)
+    read_csv(.x, col_types = c("c", "i", "f", "i", "d", "i", "f", "c", "c", "c", "f", "f", "c")) 
+
+  })
+
+
+data_df <- blue_green %>%
+  bind_rows(bourne_df)%>%
+  bind_rows(scotland_df)
+
+
+LAD_counts <- data_df %>%
+  group_by(Admin_district_code) %>%
+  mutate(low_use_prob = low_use/sum(low_use),
+         entropy = -low_use_prob/log(low_use_prob)) %>%
+  summarise(low_use = sum(low_use),
+            all_properties = sum(all_properties),
+            entropy = sum(entropy),
+            LADNM = first(LADNM),
+            RGNNM = first(RGNNM)) %>%
+  mutate(perc_low_use = low_use/all_properties)
+  
+LAD_counts %>%
+  filter(entropy<0.5, entropy>0) %>%
+ggplot(aes(x = perc_low_use, y = entropy, color = RGNNM)) + geom_point() +
+  labs(title = "Entropy vs percent low use, coloured by region") +
+  scale_color_brewer(palette = "Paired")
+
+sum(LAD_counts$low_use)
+```
+
+
+```{r}
+write_csv(LAD_counts, file.path(data_folder, "LAD_counts.csv"))
+```
+

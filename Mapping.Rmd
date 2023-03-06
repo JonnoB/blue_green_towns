@@ -25,6 +25,9 @@ all_lad_codes_blue_green <- list.files(file.path(data_folder, "low_use_LAD_files
 all_lad_codes_bourne <- list.files(file.path(data_folder, "low_use_LAD_files_bourne")) %>%
   str_extract(.,"[\\S]+$") %>% str_remove(., ".csv")
 
+all_lad_codes_scotland <- list.files(file.path(data_folder, "scotland")) %>%
+  str_extract(.,"[\\S]+$") %>% str_remove(., ".csv")
+
 LAD_sf <- read_sf(file.path(data_folder, "LAD_shapefiles")) %>%
   mutate(type = case_when(
     LAD22CD %in% all_lad_codes_blue_green ~"BG towns",
@@ -38,6 +41,8 @@ LAD_sf <- read_sf(file.path(data_folder, "LAD_shapefiles")) %>%
 
 ```{r}
 table(LAD_sf$type)
+
+
 ```
 
 
@@ -55,34 +60,76 @@ ggplot() +
 # PLot LSOA data
 
 DO not try to plot the whole of the UK it would be horrible
+```{r}
+
+```
 
 
 ```{r}
 
+
 "East Riding of Yorkshire E06000011.csv"
 
-LSOA_sf <- read_sf(file.path(data_folder, "LSOA_(Dec_2011)_Boundaries_Generalised_Clipped_(BGC)_EW_V3"))
+LSOA_sf <- bind_rows(read_sf(file.path(data_folder, "LSOA_(Dec_2011)_Boundaries_Generalised_Clipped_(BGC)_EW_V3")) %>%
+  select(LSOA11CD),
+  read_sf(file.path(data_folder, "SG_DataZoneBdry_2011")) %>%
+  select(LSOA11CD = DataZone)
+  ) %>%
+  left_join(read_rds(file.path(data_folder, "lsoa_to_all_lookup.rds")), by = c("LSOA11CD"="lsoa11cd"))
+
+
+
+
 
 file_path <- file.path(data_folder, "low_use_LAD_files_bourne/Cornwall E06000052.csv")
 
 
+
+
 #If the shape file is merged onto the tibble it no longer counts as a geometric object.
+
 #that is why the merging is done onto the shape file
+
 single_lad  = LSOA_sf %>% inner_join(read_csv(file_path), by = c("LSOA11CD" = "lsoa11cd" )) %>%
   mutate(perc = low_use_ratio * 100)
+
 
 
 ```
 
 ```{r}
+lads_to_map <- c( file.path(data_folder,'low_use_LAD_files','West Devon E07000047.csv'),
+file.path(data_folder,'low_use_LAD_files_bourne','West Suffolk E07000245.csv'),
+file.path(data_folder,'low_use_LAD_files_bourne','Conwy W06000003.csv'),
+file.path(data_folder,'scotland','East Lothian S12000010.csv') )
+
+lads_to_map %>% walk(~{
+
+  temp <- read_csv(.x)
+  single_lad  = LSOA_sf %>% 
+    filter(Admin_district_code == unique(temp$Admin_district_code)[1]) %>%
+    left_join(temp, by = c("LSOA11CD" = "lsoa11cd" )) %>%
+  mutate(
+    low_use = ifelse(is.na(low_use), 0, low_use),
+    low_use_ratio = ifelse(is.na(low_use_ratio), 0, low_use_ratio),
+    perc = low_use_ratio * 100)
+
+LADNM <- basename(.x) %>% str_remove(., "\\s\\w\\d.*")
+plot_title <- paste("Low use properties as a percent of LSOA in", LADNM)
 
 ggplot() +
   geom_sf(data = single_lad, mapping = aes(fill = perc)) + 
   coord_sf() +
   scale_fill_viridis_b() +
-  ggtitle("Low use properties as percent of MSOA in Cornwall")
+  ggtitle(plot_title)
+
+ggsave(file.path(data_folder, 'maps', paste(basename(.x) %>% str_replace(., ".csv", ".pdf"))))
+
+})
 ```
 
+
+South Devon, East Suffolk, Conwy, East Lothian
 
 
 ```{r}
