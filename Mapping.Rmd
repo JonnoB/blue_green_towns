@@ -98,12 +98,23 @@ single_lad  = LSOA_sf %>% inner_join(read_csv(file_path), by = c("LSOA11CD" = "l
 ```
 
 ```{r}
+
+c('low_use_LAD_files', 'low_use_LAD_files_bourne', 'scotland') %>% 
+  map(~{list.files(file.path(data_folder, .x), full.names = TRUE)}) %>%
+ unlist
+
+list.files(file.path(data_folder, 'low_use_LAD_files'))
+
 lads_to_map <- c( file.path(data_folder,'low_use_LAD_files','West Devon E07000047.csv'),
 file.path(data_folder,'low_use_LAD_files_bourne','West Suffolk E07000245.csv'),
 file.path(data_folder,'low_use_LAD_files_bourne','Conwy W06000003.csv'),
 file.path(data_folder,'scotland','East Lothian S12000010.csv') )
 
-lads_to_map %>% walk(~{
+lads_to_map 
+
+c('low_use_LAD_files', 'low_use_LAD_files_bourne', 'scotland') %>% 
+  map(~{list.files(file.path(data_folder, .x), full.names = TRUE)}) %>%
+ unlist %>% walk(~{
 
   temp <- read_csv(.x)
   single_lad  = LSOA_sf %>% 

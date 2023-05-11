@@ -1,0 +1,178 @@
+---
+title: "Untitled"
+output: html_document
+date: "2023-03-30"
+editor_options: 
+  chunk_output_type: console
+---
+
+
+This markdown file simply creates the price dataset merging the zoopla price and rental data with 
+
+```{r}
+library(tidyverse)
+library(jsonlite)
+
+data_folder <- './data'
+sales_prices <- file.path(data_folder, 'zoopla_extracts_sales_valid_property_id_expanded_2021')
+rental_prices <- file.path(data_folder, 'zoopla_extracts_rent_valid_property_id_expanded_2021')
+ONSPD_multi_files <- file.path(data_folder, "ONSPD/Data/multi_csv")
+```
+
+```{r}
+
+list.dirs(sales_prices, full.names = FALSE)
+
+price_data <- list.dirs(sales_prices, full.names = FALSE)[-1] %>% map_df(~{
+  print(.x)
+  ONSPD_file_path <- file.path(ONSPD_multi_files, paste0("ONSPD_NOV_2021_UK_", .x, ".csv"))
+
+ONSPD_df <- read_csv(ONSPD_file_path, col_type = rep('c', 7), 
+                     col_select = c('pcds', 'oslaua', 'osward','ctry', 'rgn', 'lsoa11', 'msoa11' )) %>%
+  mutate(pcu = str_replace_all(pcds, " ", ""))
+
+temp_df <- list.files(file.path(sales_prices, .x),  pattern = '.csv', full.names = TRUE) %>%
+  map_df(~{ 
+    
+   # test_file <- file.path(sales_prices, .x, paste0("sale_valid_property_id_expanded_year_2021_area_", .x ,"_part_00000.csv"))
+  
+    temp_df <- read_csv(.x, col_types = c('d', 'c', 'd', 'c', 'c'), 
+                    col_select = c("property_id"  , 'property_type', 'price_last', 'pcu', 'category') ) %>%
+  left_join(ONSPD_df, by = join_by(pcu) )
+    
+  })
+
+  
+  
+})
+
+
+
+all_prop_types<- c("Detached house", "Maisonette", "Terraced house", "Detached bungalow", 
+"Semi-detached house", "Cottage", "Flat", "Bungalow", "Lodge", 
+NA, "Land", "Farmhouse", "End terrace house", "Farm", "Equestrian property", 
+"Country house", "Town house", "Barn conversion", "Terraced bungalow", 
+"Villa", "Block of flats", "Mobile/park home", "Semi-detached bungalow", 
+"Studio", "Link-detached house", "Light industrial", "Chalet", 
+"Mews house", "Restaurant/cafe", "Retail premises", "Parking/garage", 
+"Hotel/guest house", "Office", "Leisure/hospitality", "Houseboat", 
+"Industrial", "Warehouse", "Finca", "Pub/bar", "LongÃ¨re")
+
+conv_prop_types <- c("Detached house", "Maisonette", "Terraced house", "Detached bungalow", 
+"Semi-detached house", "Cottage", "Flat", "Bungalow", "Lodge", "Farmhouse", "End terrace house", 
+"Country house", "Town house", "Barn conversion", "Terraced bungalow", 
+"Villa",  "Semi-detached bungalow", 
+"Studio", "Link-detached house",  "Chalet", 
+"Mews house",  "Finca")
+
+LAD_names  <- read_csv(file.path(data_folder, "ONSPD", "Documents",  "LA_UA names and codes UK as at 04_21.csv")) %>%
+  select(1:2)
+
+price_data2 <- price_data %>%
+  filter(category== "Residential", 
+         property_type %in% conv_prop_types) %>%
+  left_join(LAD_names, by = c('oslaua'= 'LAD21CD') )
+
+
+write_rds(price_data2, file.path(data_folder, "price_data.rds"))
+
+test3 <- price_data %>% group_by(property_type) %>% summarise(mean = mean(price_last),
+                                                         median = median(price_last),
+                                                sd = sd(price_last),
+                                                max = max(price_last),
+                                                min = min(price_last),
+                                                counts = n())
+
+```
+
+
+
+```{r}
+
+
+test <- list.files(file.path(data_folder, "low_use_LAD_files"), full.names = TRUE)
+
+
+
+summarised_prices <- price_data2 %>%
+  group_by(msoa11) %>%
+  summarise(
+    mean_price = mean(price_last),
+    median_price = median(price_last),
+    counts = n()
+  )
+
+
+weighted_prices <- c(list.files(file.path(data_folder, "low_use_LAD_files"), full.names = TRUE),
+                     list.files(file.path(data_folder, "low_use_LAD_files_bourne"), full.names = TRUE),
+                     list.files(file.path(data_folder, "scotland"), full.names = TRUE))  %>%
+  map_df(~
+           {
+             test <-  read_csv(.x, col_types = c("c", "i", "f", "i", "d", "i", "f", "c", "c", "c", "f", "f", "c"))
+             
+             test <- test %>%
+               group_by(MSOACD) %>%
+               summarise(across(where(is.numeric),
+                                sum)) %>%
+               left_join(test %>%
+                           group_by(MSOACD) %>%
+                           summarise(across(where(is.character),
+                                            first)), by = join_by(MSOACD)) %>%
+               select(-lsoa11cd)
+             
+             test <-
+               test %>%
+               left_join(summarised_prices, by = c('MSOACD' = 'msoa11')) %>%
+               mutate(low_use_ratio = low_use / all_properties)
+           })
+
+
+test <- weighted_prices %>%
+  group_by(Admin_district_code) %>%
+  summarise(
+    mean_price_low_use = weighted.mean(mean_price, low_use),
+    mean_price_homes = weighted.mean(mean_price, homes),
+    mean_price_all_properties = weighted.mean(mean_price, all_properties),
+    low_use = sum(low_use),
+    homes = sum(homes),
+    all_properties = sum(all_properties),
+    LADNM = first(LADNM),
+    Country_code  = first(Country_code),
+    RGNNM  = first(RGNNM),
+  ) %>%
+  select( Admin_district_code, LADNM, RGNNM, Country_code, low_use, homes, all_properties, 
+          mean_price_low_use, mean_price_homes, mean_price_all_properties ) %>%
+  mutate(low_use_perc = low_use/all_properties,
+         price_ratio = mean_price_low_use/mean_price_all_properties)
+
+write_csv(test, file.path(data_folder, 'weighted_price_LAD.csv'))
+
+```
+
+
+#OLdham Errors
+
+A collection of a small number of errors
+```{r}
+
+.x <- "OL"
+
+  print(.x)
+  ONSPD_file_path <- file.path(ONSPD_multi_files, paste0("ONSPD_NOV_2021_UK_", .x, ".csv"))
+
+ONSPD_df <- read_csv(ONSPD_file_path, col_type = rep('c', 7), 
+                     col_select = c('pcds', 'oslaua', 'osward','ctry', 'rgn', 'lsoa11', 'msoa11' )) %>%
+  mutate(pcu = str_replace_all(pcds, " ", ""))
+
+temp_df <- list.files(file.path(sales_prices, .x),  pattern = '.csv', full.names = TRUE) %>%
+  map_df(~{ 
+    
+   # test_file <- file.path(sales_prices, .x, paste0("sale_valid_property_id_expanded_year_2021_area_", .x ,"_part_00000.csv"))
+  
+    temp_df <- read_csv(.x, col_types = c('d', 'c', 'd', 'c', 'c'), 
+                    col_select = c("property_id"  , 'property_type', 'price_last', 'pcu', 'category') ) %>%
+  left_join(ONSPD_df, by = join_by(pcu) )
+    })
+
+```
+
