@@ -156,10 +156,13 @@ test <- tibble(file_names  = list.files(jb_cleared)) %>%
 
 #files_with_other_names <- c("Arun 22.09.02 Attachment 1 - Mingay - Aug22_36.xlsx")
 
+#list all files in the data set folders
 file_names <- c(list.files(jb_cleared,  pattern = "discount", ignore.case = T, full.names = T), 
             #    files_with_other_names,
-                list.files(original_empty_homes_folder, ignore.case = T, recursive = T, full.names = T))
+                list.files(original_empty_homes_folder, 
+                           ignore.case = T, recursive = T, full.names = T))
 
+#create a dataframe of all the codes from the returned FOI forms, the dataframe contains the code, the lsoa the file name and whether the data comes from the original collection or the BG collection
 all_codes <- file_names  %>% map_df(~{
   
    print(.x)
@@ -197,13 +200,13 @@ low_use_dict <- all_codes  %>% group_by(code) %>% summarise(count = n() ) %>%
            grepl("Class (A|C|B)", code, ignore.case = T) ~ TRUE,
            grepl("major", code, ignore.case = T) ~ TRUE,
            grepl("vacant", code, ignore.case = T) ~ TRUE,
-           str_detect(code, "^(B|BE|A|AE|C|C1|C2|C3|CE|CU|C2017|D|D6|L|L5|L10)$") ~TRUE,
+           str_detect(code, "^(B|BE|A|AE|C|C1|C2|C3|C6|CE|CU|C2017|D|D6|L|L5|L10)$") ~TRUE,
            str_detect(code, "^C1MTH$") ~TRUE,
            grepl("LTE", code, ignore.case = T) ~ TRUE, 
            grepl("Prescribed Class D", code, ignore.case = T) ~ TRUE,
            grepl("Standard Empty", code, ignore.case = T) ~ TRUE,
            grepl("Unoccupied|Unnocupied|Zero Occupancy|zero", code, ignore.case = T) ~ TRUE,
-           grepl("LEVY", code, ignore.case = T) ~ TRUE,
+           grepl("LEVY|LEV2", code, ignore.case = T) ~ TRUE,
            grepl("Unocc & Furn|unocc furn", code, ignore.case = T) ~ TRUE,
            grepl("sh", code, ignore.case = T) ~ TRUE, #stands for second home RBKC
            grepl("bv", code, ignore.case = T) ~ TRUE, #stands for unoccupied but furnished, tower hamlets
@@ -241,6 +244,8 @@ all_codes %>%
   filter( grepl("^BV$", code, ignore.case = T)) 
 
 
+write_csv(low_use_dict, "housing_class_counts.csv" )
+
 ```
 
 
@@ -252,73 +257,9 @@ This takes the all codes data frame filters to keep only low use codes, aggregat
 
 ```{r}
 
-return_lookup_data <- function(folder_path, file_regex_pattern ){
-  
-  #get the path to the ward names lookup
-  lookup_path <-list.files(folder_path, 
-                           pattern = file_regex_pattern, 
-                           ignore.case = TRUE, 
-                           full.names = TRUE)
-  
-  lookup_df <- read_csv(lookup_path) 
-  
-  
-  
-  #Removes the years digits from the column names.
-  #The lookup tables have the year that the table codes were generated the name
-  #i.e. on the wardnames lookup from after the 2020 update 
-  #the column names will be "WD20CD" and "WD20NM",
-  #This Regex removes the numbers meaning that changes in years will not affect the process
-  #This makes the process more robust.
-  #However, if the ONS change the naming convention could cause an error
-  names(lookup_df) = gsub("\\d","",names(lookup_df))
-  
-  return(lookup_df)
-}
-
-
-wardnames_lookup <- return_lookup_data(documents_path, "^ward names.*(csv)" )
-
-region_lookup <- return_lookup_data(documents_path, "^region.*(csv)" ) %>%
-  select(1,3)
-
-LADNM_lookup <- return_lookup_data(documents_path, "^la_ua.*(csv)" ) %>%
-  select(1:2)
-
-ONSPD_df <- read_csv(file.path("/home/jonno/blue_green_towns/data/ONSPD/Data","ONSPD_NOV_2021_UK.csv")) %>%
-  select(lsoa11cd = lsoa11,
-         MSOACD = msoa11, oslaua,
-         OA11CD = oa11, Country_code = ctry,
-         RGNCD =  rgn,
-         WDCD = osward) %>%
-  #there are no postcodes so the dataset can be simplified by removing duplicates
-  distinct() %>%
-    left_join(., region_lookup, by = "RGNCD") %>%
-  #  left_join(wardnames_lookup, by = "WDCD") %>%
-    left_join(LADNM_lookup, by = c("oslaua"= "LADCD")) %>%
-    #filter(Country_code == "W92000004")
-    select(Country_code, Admin_district_code = oslaua, 
-           #Admin_ward_code = WDCD, 
-           lsoa11cd, MSOACD, LADNM, 
-           RGNCD, RGNNM
-           #, WD16NM = WDNM
-           ) %>%
-    mutate(
-      #Make sure Scotland and Wales have region names
-      RGNCD = case_when(
-        grepl("W", Country_code) ~"Wales",
-        grepl("S", Country_code) ~"Scotland",
-        TRUE ~ RGNCD),
-      RGNNM = case_when(
-        grepl("W", Country_code) ~"Wales",
-        grepl("S", Country_code) ~"Scotland",
-        TRUE ~ RGNNM
-      )) %>%
-    filter(!is.na(RGNNM),
-           LADNM != "NA",
-          # RGNCD !="Scotland"
-           ) %>%
-  distinct()
+ONSPD_df <-load_and_prepare_geo_data(file.path("/home/jonno/blue_green_towns/data/ONSPD/Data",
+                                    "ONSPD_NOV_2021_UK.csv"),
+                          documents_path)
 
 write_rds(ONSPD_df, file.path(data_folder, "lsoa_to_all_lookup.rds"))
 ```
@@ -347,19 +288,32 @@ test <- all_codes %>%
 
 ```{r}
 
+properties_in_each_lsoa <-  read_xlsx(file.path(data_folder, "CTSOP1.1_2021.xlsx"), 
+                                      sheet = 3, skip = 4 ) %>%
+  select(lsoa11cd = ecode, all_properties)
+
+all_low_use_data <-process_low_use_data(all_codes, low_use_dict, properties_in_each_lsoa)
+
+save_all_processed_fois(all_low_use_data, data_folder)
+```
+
+
+
+```{r}
+
+
 all_low_use_data <- all_codes %>%
-  left_join( low_use_dict) %>%
+  left_join( low_use_dict, by = 'code') %>%
   filter(low_use) %>%
   group_by(lsoa11cd) %>%
   summarise(low_use = n(),
             type = first(type)) %>%
   #load the council tax household counts
-  left_join( read_xlsx(file.path(data_folder, "CTSOP1.1_2021.xlsx"), sheet = 3, skip = 4 ) %>%
-  select(lsoa11cd = ecode, all_properties) ) %>%
+  left_join(properties_in_each_lsoa, by = 'lsoa11cd' ) %>%
   mutate(low_use_ratio = low_use/all_properties,
          homes = all_properties - low_use) %>%
   left_join(., ONSPD_df %>%
-  distinct()) %>%
+  distinct(), by = 'lsoa11cd') %>%
   filter(complete.cases(.))
 
 
@@ -383,6 +337,24 @@ unique(all_low_use_data$Admin_district_code) %>%
 
 ```
 
+
+```{r}
+
+# About 0.4% of the data is duplicated, this is really small so I can't be bothered to workout a different solution
+
+test <- all_low_use_data %>% group_by(lsoa11cd) %>%
+  summarise(counts = n()) %>% filter(counts>1) %>%
+  left_join( all_low_use_data)
+
+
+test = all_low_use_data %>%
+  group_by(lsoa11cd) %>%
+  filter(n()>1)
+```  
+
+
+
+
 # Process Scotland
 
 The Scottish data, comes whole and in a very easy to use format. Howevever, for simplicity I will format it to be identical to the rest of the data set. This will mean it can be treated identically
@@ -390,16 +362,16 @@ The Scottish data, comes whole and in a very easy to use format. Howevever, for 
 ```{r}
 scottish_data <- read_xlsx(file.path(data_folder,"hh-est-by-2011-dz-small-area-14-21.xlsx"), sheet = "2021",
                            skip = 3) %>%
-  select(c(1,3,5,6))
+  select(c(1,3,5,6,8))
 
-colnames(scottish_data) <-c('lsoa11cd', 'all_properties', 'low_use', 'exempt')
+colnames(scottish_data) <-c('lsoa11cd', 'all_properties', 'low_use', 'exempt', 'scnd_homes')
 
 scottish_data <- scottish_data  %>%
   mutate(type = "Scotland",
-         low_use = low_use - exempt
+         low_use = low_use - exempt + scnd_homes
        )%>% #exempt properties are excluded as this will likely include
-  #soldier away on deployment, the recently deceeased etc
-  select(-exempt) %>%
+  #soldier away on deployment, the recently deceased etc
+  select(-exempt, -scnd_homes) %>%
   mutate(low_use_ratio = low_use/all_properties,
          homes = all_properties - low_use) %>%
   left_join(., ONSPD_df %>%

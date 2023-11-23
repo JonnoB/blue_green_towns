@@ -45,23 +45,111 @@ table(LAD_sf$type)
 
 ```
 
+# Plot GB 
 
 ```{r}
 
+weighted_price_LAD <- read_csv('./data/weighted_price_LAD.csv') %>%
+  mutate(quartiles= cut(low_use_perc, 
+                        breaks = quantile(low_use_perc, 
+                        probs = seq(0, 1, 0.25)), 
+                        labels = 1:4, 
+                        include.lowest = TRUE))
+  
+  
+
 ggplot() +
-  geom_sf(data = LAD_sf, mapping = aes(fill = type, linetype = NA)) + 
+  geom_sf(data = LAD_sf, 
+          mapping = aes(fill = type, linetype = NA)) + 
   coord_sf() +
   ggtitle("Data available for project by collection type")
 
 
+LAD_sf %>% left_join(weighted_price_LAD %>%
+    select(LAD22CD = Admin_district_code, quartiles)) %>%
+  ggplot() +
+  geom_sf(mapping = aes(fill = as.factor(quartiles), linetype = NA)) + 
+  coord_sf() +
+  scale_fill_viridis_d(na.value = "grey") +
+  labs(title = 'LADs coloured by low-use Quartile, Q4 has the most low-use', fill= 'quartiles')
+
+  
 ```
 
 
 # PLot LSOA data
 
 DO not try to plot the whole of the UK it would be horrible
-```{r}
 
+```{r}
+data_path = file.path(data_folder, "low_use_LAD_files_bourne", "Southwark E09000028.csv")
+
+single_lad  = LSOA_sf %>% inner_join(read_csv(data_path), by = c("LSOA11CD" = "lsoa11cd" )) %>%
+  mutate(perc = low_use_ratio * 100) %>%
+  #convert to correct coordinate sytem
+  st_transform(., 4326)
+
+#get bounding box for LAD
+lad_bbox <- st_bbox(single_lad)
+  
+```
+
+
+```{r}
+test <- LSOA_sf %>%filter(LADNM=='Southwark')
+
+test %>% ggplot() + geom_sf()
+
+library(leaflet)
+
+pal <- colorNumeric(palette = "viridis", domain = single_lad$low_use)
+
+m <- leaflet() %>%
+  addTiles() %>%
+  setView(lng = -0.07, lat = 51.47, zoom = 13)# %>%
+  #addPolygons(data = single_lad, color = pal(single_lad$low_use), stroke = 1, opacity = 0.8)
+
+
+m %>% addPolygons(
+    label = ~low_use,  # the column you want to display
+    labelOptions = labelOptions(
+        style = list("background-color" = "white"),
+        textOnly = TRUE,
+        direction = 'auto'  # position of label can be 'auto', 'right', 'left', etc.
+    ),
+    highlightOptions = highlightOptions(
+        weight = 5,
+        color = "#666",
+        fillOpacity = 0.7,
+        bringToFront = TRUE
+    )
+)
+
+
+leaflet() %>%
+  addTiles() %>%
+  setView(lng = -0.07, lat = 51.47, zoom = 13) %>%
+  addPolygons(
+    data = single_lad, 
+    color = pal(single_lad$low_use), 
+    stroke = 1, 
+    opacity = 0.8,
+    label = ~paste("LSOA Code:", LSOA11CD, " . ", "Low Use count:", low_use),
+    labelOptions =labelOptions(
+        style = list(
+            "background-color" = "white",
+            "font-size" = "14px"  # adjust the size as needed
+        ),
+        textOnly = TRUE,
+        direction = 'auto'
+    ),
+    highlightOptions = highlightOptions(
+        weight = 5,
+        color = "#666",
+        fillOpacity = 0.7,
+        bringToFront = TRUE
+    )
+  )
 ```
 
 
@@ -78,12 +166,7 @@ LSOA_sf <- bind_rows(read_sf(file.path(data_folder, "LSOA_(Dec_2011)_Boundaries_
   left_join(read_rds(file.path(data_folder, "lsoa_to_all_lookup.rds")), by = c("LSOA11CD"="lsoa11cd"))
 
 
-
-
-
 file_path <- file.path(data_folder, "low_use_LAD_files_bourne/Cornwall E06000052.csv")
-
-
 
 
 #If the shape file is merged onto the tibble it no longer counts as a geometric object.
@@ -97,98 +180,127 @@ single_lad  = LSOA_sf %>% inner_join(read_csv(file_path), by = c("LSOA11CD" = "l
 
 ```
 
+#get deciles for all data set
+
+I am going to colour the maps by absolute decile of low use percentage. to do this I need to load the whole dataset then find the deciles
+```{r}
+# Load all data into a list
+all_data <- c('low_use_LAD_files', 'low_use_LAD_files_bourne', 'scotland') %>% 
+  map(~{list.files(file.path(data_folder, .x), full.names = TRUE)}) %>%
+  unlist %>%
+  map(~ read_csv(.x)) %>%
+  bind_rows()
+
+# Calculate the combined perc
+all_data <- all_data %>%
+  mutate(
+    low_use = ifelse(is.na(low_use), 0, low_use),
+    low_use_ratio = ifelse(is.na(low_use_ratio), 0, low_use_ratio),
+    perc = low_use_ratio * 100)
+
+# Calculate deciles using the combined data
+decile_breaks <- quantile(all_data$perc, probs = seq(0, 1, 0.1))
+
+
+all_data <- all_data %>% mutate(
+  decile = cut(perc, breaks = decile_breaks[0:10], labels = 1:9, include.lowest = TRUE)
+  )
+
+
+
+all_data %>%
+  ggplot(aes(x = perc)) +geom_density( ) +
+  labs(title=  "Percentage of LSOA low-use across all dataset", subtitle = "Mean value: 2.8, Median value: 1.9",
+       x = "Percentage of LSOA that is low-use")
+
+mean(all_data$perc)
+median(all_data$perc)
+```
+
+
+
 ```{r}
 
 c('low_use_LAD_files', 'low_use_LAD_files_bourne', 'scotland') %>% 
   map(~{list.files(file.path(data_folder, .x), full.names = TRUE)}) %>%
- unlist
+  unlist
 
 list.files(file.path(data_folder, 'low_use_LAD_files'))
 
 lads_to_map <- c( file.path(data_folder,'low_use_LAD_files','West Devon E07000047.csv'),
-file.path(data_folder,'low_use_LAD_files_bourne','West Suffolk E07000245.csv'),
-file.path(data_folder,'low_use_LAD_files_bourne','Conwy W06000003.csv'),
-file.path(data_folder,'scotland','East Lothian S12000010.csv') )
+                  file.path(data_folder,'low_use_LAD_files_bourne','West Suffolk E07000245.csv'),
+                  file.path(data_folder,'low_use_LAD_files_bourne','Conwy W06000003.csv'),
+                  file.path(data_folder,'scotland','East Lothian S12000010.csv') )
 
 lads_to_map 
 
 c('low_use_LAD_files', 'low_use_LAD_files_bourne', 'scotland') %>% 
   map(~{list.files(file.path(data_folder, .x), full.names = TRUE)}) %>%
- unlist %>% walk(~{
+  unlist %>% walk(~{
+    
+    temp <- read_csv(.x)
+    single_lad  = LSOA_sf %>% 
+      filter(Admin_district_code == unique(temp$Admin_district_code)[1]) %>%
+      left_join(temp, by = c("LSOA11CD" = "lsoa11cd" )) %>%
+      mutate(
+        low_use = ifelse(is.na(low_use), 0, low_use),
+        low_use_ratio = ifelse(is.na(low_use_ratio), 0, low_use_ratio),
+        perc = low_use_ratio * 100,
+        decile = cut(perc, breaks = decile_breaks[0:10], labels = 1:9, include.lowest = TRUE),
+        decile = ifelse(is.na(decile), 10, decile),
+        decile = factor(decile, levels = 1:10))
+    
+    LADNM <- basename(.x) %>% str_remove(., "\\s\\w\\d.*")
+    plot_title <- paste("Low use properties as a percent of LSOA in", LADNM)
+    
+    ggplot() +
+      geom_sf(data = single_lad, mapping = aes(fill = decile)) + 
+      coord_sf() +
+      scale_fill_viridis_d(name = "Decile", 
+                           breaks = as.character(1:10), 
+                           labels = 1:10.,
+                           drop = FALSE) +
+      ggtitle(plot_title)
+    
+    
+    ggsave(file.path(data_folder, 'maps', paste(basename(.x) %>% str_replace(., ".csv", ".pdf"))))
+    
+  })
+```
 
-  temp <- read_csv(.x)
+
+
+```{r}
+temp <- read_csv("./data/low_use_LAD_files/Gwynedd W06000002.csv" )
   single_lad  = LSOA_sf %>% 
     filter(Admin_district_code == unique(temp$Admin_district_code)[1]) %>%
     left_join(temp, by = c("LSOA11CD" = "lsoa11cd" )) %>%
   mutate(
     low_use = ifelse(is.na(low_use), 0, low_use),
     low_use_ratio = ifelse(is.na(low_use_ratio), 0, low_use_ratio),
-    perc = low_use_ratio * 100)
+    perc = low_use_ratio * 100,
+    decile = cut(perc, breaks = decile_breaks[0:10], labels = 1:9, include.lowest = TRUE),
+     decile = ifelse(is.na(decile), 10, decile),
+    decile = factor(decile, levels = 1:10))
 
-LADNM <- basename(.x) %>% str_remove(., "\\s\\w\\d.*")
+LADNM <- basename('kkkk') %>% str_remove(., "\\s\\w\\d.*")
 plot_title <- paste("Low use properties as a percent of LSOA in", LADNM)
 
 ggplot() +
-  geom_sf(data = single_lad, mapping = aes(fill = perc)) + 
-  coord_sf() +
-  scale_fill_viridis_b() +
-  ggtitle(plot_title)
+    geom_sf(data = single_lad, mapping = aes(fill = decile)) + 
+    coord_sf() +
+    scale_fill_viridis_d(name = "Decile", 
+                         breaks = as.character(1:10), 
+                         labels = 1:10.,
+                         drop = FALSE) +
+    ggtitle(plot_title)
 
-ggsave(file.path(data_folder, 'maps', paste(basename(.x) %>% str_replace(., ".csv", ".pdf"))))
-
-})
 ```
 
 
 South Devon, East Suffolk, Conwy, East Lothian
 
-
-```{r}
-
-tucson_major <- getbb(place_name = "cornwall") %>%
-  opq(timeout = 50) %>%
-  add_osm_feature(key = "highway", 
-                  value = c("motorway", "primary", "secondary")) %>%
-  osmdata_sf()
-
-
-street_plot <- ggplot() +
-  geom_sf(data = tucson_major$osm_lines,
-          inherit.aes = FALSE,
-          color = "black",
-          size = 0.2)
-# Print the plot
-street_plot
-
-
-tucson_minor <- getbb(place_name = "Cornwall") %>%
-  opq() %>%
-  add_osm_feature(key = "highway", value = c("tertiary", "residential")) %>%
-  osmdata_sf()
-
-street_plot <- street_plot +
-  geom_sf(data = tucson_minor$osm_lines,
-          inherit.aes = FALSE,
-          color = "#666666",  # medium gray
-          size = 0.1) # half the width of the major roads
-# Print the plot
-street_plot
-
-ggplot()+
-      geom_sf(data = single_lad, mapping = aes(fill = perc,  linetype = NA)) + 
-  coord_sf() +
-  geom_sf(data = tucson_major$osm_lines,
-          inherit.aes = FALSE,
-          color = "orange",
-          size = 0.2) +
-  geom_sf(data = tucson_minor$osm_lines,
-          inherit.aes = FALSE,
-          color = "orange",
-          size = 0.2) +
-  scale_fill_viridis_b() +
-  labs(title ="Low use properties as percent of MSOA in Cornwall", fill = "Percent")
-```
-
+# map with roads
 
 ```{r}
 
@@ -245,15 +357,119 @@ return(out)
 
 
 ```{r}
-g <- low_use_map_plot(data_path = file.path(data_folder, "low_use_LAD_files_bourne", "Cornwall E06000052.csv"), 
-                 LSOA_sf,  title = "Low use properties as percent of MSOA in Cornwall" )
+g <- low_use_map_plot(data_path = file.path(data_folder, "low_use_LAD_files", 
+                                            "Gwynedd W06000002.csv"), 
+                 LSOA_sf,  title = "Low use properties as percent of LSOA in Tower Hamlets" )
 
 g
 
 
-g2 <- low_use_map_plot(data_path = file.path(data_folder, "low_use_LAD_files", "East Riding of Yorkshire E06000011.csv"), 
+g2 <- low_use_map_plot(data_path = file.path(data_folder, "scotland", "Argyll and Bute S12000035.csv"), 
                  LSOA_sf,  title = "Low use properties as percent of MSOA in East Riding" )
 
 g2
+
+```
+
+
+
+# Create Hex binned uk map
+
+The issue of certain local authorities dominating or being swamped by others due to physical size can be overcome using hexbins
+
+
+
+
+```{r}
+
+library(jsonlite)
+
+data <- read_json(file.path(data_folder, 'hex_mapping' ,'uk-local-authority-districts-2023.hexjson'))
+hexes <- data$hexes
+
+df <- enframe(data$hexes, name = "id") 
+# Spread the nested list into multiple columns
+df <- df %>% unnest_wider(value) %>%
+  filter(region != "N92000002")  %>%
+  left_join(weighted_price_LAD %>%
+    select(Admin_district_code, quartiles), by = c('id' = 'Admin_district_code')) %>%
+  mutate(type = case_when(
+    id %in% all_lad_codes_blue_green ~"BG towns",
+    id %in% all_lad_codes_bourne ~"Bourne 2019",
+    str_sub(id, 1, 1)=="S" ~ "ScotGov",
+    TRUE ~ "No Data"
+  ),
+  quartiles = as.factor(region))
+
+
+hex_vertices <- function(q, r, layout="odd-r") {
+  size = 1 # The size has no impact on the plot but is included in case adding it 
+  #as an argument later is useful
+  q_adjusted = q
+  r_adjusted = r
+  
+  # Validate layout input
+  valid_layouts <- c("odd-r", "even-r", "odd-q", "even-q")
+  if (!layout %in% valid_layouts) {
+    stop("Invalid layout specified. Choose from: ", paste(valid_layouts, collapse=", "))
+  }
+  
+  # Adjust for the layout
+  if (layout == "odd-r" && (r %% 2) == 1) {
+    q_adjusted = q + 0.5
+  } else if (layout == "even-r" && (r %% 2) == 0) {
+    q_adjusted = q + 0.5
+  } else if (layout == "odd-q" && (q %% 2) == 1) {
+    r_adjusted = r + 0.5
+  } else if (layout == "even-q" && (q %% 2) == 0) {
+    r_adjusted = r + 0.5
+  }
+  
+  if(layout %in% c("odd-r", "even-r")) { # Pointy-topped hex grid
+    # Convert (q_adjusted, r_adjusted) directly to Cartesian x, y
+    x = size * sqrt(3) * q_adjusted
+    y = size * 3/2 * r_adjusted
+    # Calculate vertices for pointy-topped hex
+    angles <- seq(0, 5*pi/3, by = pi/3)
+    data.frame(x = x + size * sin(angles), 
+               y = y + size * cos(angles))
+  } else { # Flat-topped hex grid
+    # Convert (q_adjusted, r_adjusted) directly to Cartesian x, y
+    x = size * 3/2 * q_adjusted
+    y = size * sqrt(3) * r_adjusted
+    # Calculate vertices for flat-topped hex
+    angles <- seq(pi/6, 13*pi/6, by = pi/3)
+    data.frame(x = x + size * cos(angles), 
+               y = y + size * sin(angles))
+  }
+}
+
+
+
+df_vertices <- df %>%
+  rowwise() %>%
+  do(hex_vertices(.$q, .$r,  'even-r'))  %>% ungroup %>%
+  mutate(id = rep(df$id, each=6), 
+         fill_value = rep(df$quartiles, each=6))
+
+g <- ggplot(df_vertices, aes(x=x, y=y, group=id, fill=fill_value )) +
+  geom_polygon( color="black") +
+  theme_minimal() +
+  theme(
+    axis.title.x=element_blank(),
+    axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+    axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank())
+
+
+g+  labs(title = 'LADs coloured by low-use Quartile, Q4 has the most low-use', fill = 'Quartiles',
+       x = NULL, y = NULL)  
++
+  scale_fill_viridis_d(na.value = "grey") 
+
+
+g
 ```
 

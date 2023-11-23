@@ -7,11 +7,12 @@ editor_options:
 ---
 
 
-This markdown file simply creates the price dataset merging the zoopla price and rental data with 
+This markdown file simply creates the price dataset merging the zoopla price
 
 ```{r}
 library(tidyverse)
 library(jsonlite)
+library(readxl)
 
 data_folder <- './data'
 sales_prices <- file.path(data_folder, 'zoopla_extracts_sales_valid_property_id_expanded_2021')
@@ -19,35 +20,41 @@ rental_prices <- file.path(data_folder, 'zoopla_extracts_rent_valid_property_id_
 ONSPD_multi_files <- file.path(data_folder, "ONSPD/Data/multi_csv")
 ```
 
+
+# Create a clean house price dataset
+
+This block creates a cleaned house price dataset using the Zoopla property data from the UBDC. The data is subsetted to only include property types named in 'conv_prop_types'. The price data includes geographical information like postcode, LSOA, MSOA, Region code, etc, it also includes last listed price, property type and the Zoopla price ID.
+
+A dataframe of summary statistics for each property type is also returned. 
+
 ```{r}
-
-list.dirs(sales_prices, full.names = FALSE)
-
-price_data <- list.dirs(sales_prices, full.names = FALSE)[-1] %>% map_df(~{
-  print(.x)
-  ONSPD_file_path <- file.path(ONSPD_multi_files, paste0("ONSPD_NOV_2021_UK_", .x, ".csv"))
-
-ONSPD_df <- read_csv(ONSPD_file_path, col_type = rep('c', 7), 
-                     col_select = c('pcds', 'oslaua', 'osward','ctry', 'rgn', 'lsoa11', 'msoa11' )) %>%
-  mutate(pcu = str_replace_all(pcds, " ", ""))
-
-temp_df <- list.files(file.path(sales_prices, .x),  pattern = '.csv', full.names = TRUE) %>%
-  map_df(~{ 
+# Getting a list of directories within the `sales_prices` directory.
+# Omitting the root directory from the list
+price_data <- list.dirs(sales_prices, full.names = FALSE)[-1] %>% 
+  map_df(~{
+    # Printing the current directory
+    print(.x)
     
-   # test_file <- file.path(sales_prices, .x, paste0("sale_valid_property_id_expanded_year_2021_area_", .x ,"_part_00000.csv"))
-  
-    temp_df <- read_csv(.x, col_types = c('d', 'c', 'd', 'c', 'c'), 
-                    col_select = c("property_id"  , 'property_type', 'price_last', 'pcu', 'category') ) %>%
-  left_join(ONSPD_df, by = join_by(pcu) )
+    # Constructing the ONSPD file path based on the directory name
+    ONSPD_file_path <- file.path(ONSPD_multi_files, paste0("ONSPD_NOV_2021_UK_", .x, ".csv"))
     
+    # Reading the ONSPD data and selecting specific columns
+    ONSPD_df <- read_csv(ONSPD_file_path, col_type = rep('c', 7), 
+                         col_select = c('pcds', 'oslaua', 'osward','ctry', 'rgn', 'lsoa11', 'msoa11')) %>%
+      # Replacing spaces in `pcds` column to create `pcu` column
+      mutate(pcu = str_replace_all(pcds, " ", ""))
+    
+    # Getting a list of all CSV files in the current directory
+    temp_df <- list.files(file.path(sales_prices, .x),  pattern = '.csv', full.names = TRUE) %>%
+      # Reading and joining each CSV file with the ONSPD data
+      map_df(~{
+        read_csv(.x, col_types = c('d', 'c', 'd', 'c', 'c'), 
+                col_select = c("property_id"  , 'property_type', 'price_last', 'pcu', 'category')) %>%
+          left_join(ONSPD_df, by = join_by(pcu))
+      })
   })
 
-  
-  
-})
-
-
-
+# Defining property types
 all_prop_types<- c("Detached house", "Maisonette", "Terraced house", "Detached bungalow", 
 "Semi-detached house", "Cottage", "Flat", "Bungalow", "Lodge", 
 NA, "Land", "Farmhouse", "End terrace house", "Farm", "Equestrian property", 
@@ -65,35 +72,68 @@ conv_prop_types <- c("Detached house", "Maisonette", "Terraced house", "Detached
 "Studio", "Link-detached house",  "Chalet", 
 "Mews house",  "Finca")
 
-LAD_names  <- read_csv(file.path(data_folder, "ONSPD", "Documents",  "LA_UA names and codes UK as at 04_21.csv")) %>%
+# Reading LAD names and selecting first two columns
+LAD_names <- read_csv(file.path(data_folder, "ONSPD", "Documents", "LA_UA names and codes UK as at 04_21.csv")) %>%
   select(1:2)
 
+# Filtering the price data for residential property types and joining with LAD names
 price_data2 <- price_data %>%
-  filter(category== "Residential", 
-         property_type %in% conv_prop_types) %>%
-  left_join(LAD_names, by = c('oslaua'= 'LAD21CD') )
+  filter(category == "Residential", property_type %in% conv_prop_types) %>%
+  left_join(LAD_names, by = c('oslaua' = 'LAD21CD'))
 
-
+# Saving the filtered data as an RDS file
 write_rds(price_data2, file.path(data_folder, "price_data.rds"))
 
-test3 <- price_data %>% group_by(property_type) %>% summarise(mean = mean(price_last),
-                                                         median = median(price_last),
-                                                sd = sd(price_last),
-                                                max = max(price_last),
-                                                min = min(price_last),
-                                                counts = n())
+# Calculating summary statistics for each property type in price_data
+summary_statistics_property_types <- price_data %>%
+  group_by(property_type) %>%
+  summarise(
+    mean = mean(price_last),
+    median = median(price_last),
+    sd = sd(price_last),
+    max = max(price_last),
+    min = min(price_last),
+    counts = n()
+  )
+
+summary_statistics_property_types 
+
+```
+
+
+```{r}
+list.files(file.path(data_folder, "scotland"), full.names = TRUE)
+
+LAD_data <- read_csv( "./data/scotland/Aberdeen City S12000033.csv"   , col_types = c("c", "i", "f", "i", "d", "i", "f", "c", "c", "c", "f", "f", "c")) %>%
+  mutate(low_use_fract = low_use/sum(low_use),
+         log_low_use_fract = log2(low_use_fract),
+         log_low_use_fract = ifelse(is.finite(log_low_use_fract), log_low_use_fract, 0)) 
+
+ LAD_data %>%
+  mutate(low_use_fract = low_use/sum(low_use),
+         log_low_use_fract = log2(low_use_fract),
+         #The below line removes any infinite values caused by no low use property
+         log_low_use_fract = ifelse(is.finite(log_low_use_fract), log_low_use_fract, 0)) %>%
+  summarise(Admin_district_code = first(Admin_district_code),
+    max_low_use_ratio_lsoa = max(low_use_ratio),
+            min_low_use_ratio_lsoa = min(low_use_ratio),
+            entropy = -sum(low_use_fract * log_low_use_fract))    
+
 
 ```
 
 
 
+
 ```{r}
+# Get a list of files in the 'low_use_LAD_files' directory
+low_use_file_paths <-  c(
+  list.files(file.path(data_folder, "low_use_LAD_files"), full.names = TRUE),
+  list.files(file.path(data_folder, "low_use_LAD_files_bourne"), full.names = TRUE),
+  list.files(file.path(data_folder, "scotland"), full.names = TRUE)
+)
 
-
-test <- list.files(file.path(data_folder, "low_use_LAD_files"), full.names = TRUE)
-
-
-
+# Summarize prices by 'msoa11' and calculate mean, median, and counts
 summarised_prices <- price_data2 %>%
   group_by(msoa11) %>%
   summarise(
@@ -102,32 +142,51 @@ summarised_prices <- price_data2 %>%
     counts = n()
   )
 
-
-weighted_prices <- c(list.files(file.path(data_folder, "low_use_LAD_files"), full.names = TRUE),
-                     list.files(file.path(data_folder, "low_use_LAD_files_bourne"), full.names = TRUE),
-                     list.files(file.path(data_folder, "scotland"), full.names = TRUE))  %>%
-  map_df(~
-           {
-             test <-  read_csv(.x, col_types = c("c", "i", "f", "i", "d", "i", "f", "c", "c", "c", "f", "f", "c"))
-             
-             test <- test %>%
-               group_by(MSOACD) %>%
-               summarise(across(where(is.numeric),
-                                sum)) %>%
-               left_join(test %>%
-                           group_by(MSOACD) %>%
-                           summarise(across(where(is.character),
-                                            first)), by = join_by(MSOACD)) %>%
-               select(-lsoa11cd)
-             
-             test <-
-               test %>%
-               left_join(summarised_prices, by = c('MSOACD' = 'msoa11')) %>%
-               mutate(low_use_ratio = low_use / all_properties)
-           })
+# Obtain a list of files from three directories, and then process each file in that list
+weighted_prices <- low_use_file_paths %>%
+  map_df(~ {
+    LAD_data <- read_csv(.x, col_types = c("c", "i", "f", "i", "d", "i", "f", "c", "c", "c", "f", "f", "c"))
+    
+    # Sum numeric columns and join with first character columns after grouping by MSOACD
+    LAD_data <- LAD_data %>%
+      group_by(MSOACD) %>%
+      summarise(across(where(is.numeric), sum)) %>%
+      left_join(LAD_data %>%
+        group_by(MSOACD) %>%
+        summarise(across(where(is.character), first)), by = "MSOACD") %>%
+      select(-lsoa11cd)
+    
+    # Join with summarised prices and calculate a new ratio column
+    LAD_data %>%
+      left_join(summarised_prices, by = c('MSOACD' = 'msoa11')) %>%
+      mutate(low_use_ratio = low_use / all_properties)
+  })
 
 
-test <- weighted_prices %>%
+#creates summary statistics from lsoa level data summarised to LAD level
+#used to find high density areas of low use property
+lsoa_stats_LAD_level <- low_use_file_paths %>%
+  map_df(~ {
+    read_csv(.x, 
+             col_types = c("c", "i", "f", "i", "d", "i", "f", "c", "c", "c", "f", "f", "c")
+             ) %>%
+  mutate(low_use_fract = low_use/sum(low_use),
+         log_low_use_fract = log2(low_use_fract),
+         #The below line removes any infinite values caused by no low use property
+         log_low_use_fract = ifelse(is.finite(log_low_use_fract), log_low_use_fract, 0)) %>%
+  summarise(Admin_district_code = first(Admin_district_code),
+    max_low_use_ratio_lsoa = max(low_use_ratio),
+            min_low_use_ratio_lsoa = min(low_use_ratio),
+            entropy = -sum(low_use_fract * log_low_use_fract))    
+
+  })
+
+#load the uk ppopulation data
+UK_pop <- read_xls(file.path(data_folder, 'population_data','ukpopestimatesmid2021on2021geographyfinal.xls'), 
+                  sheet = 7, skip = 7)
+
+# Group by 'Admin_district_code' and calculate weighted means and other metrics
+weighted_price_LAD <- weighted_prices %>%
   group_by(Admin_district_code) %>%
   summarise(
     mean_price_low_use = weighted.mean(mean_price, low_use),
@@ -137,15 +196,50 @@ test <- weighted_prices %>%
     homes = sum(homes),
     all_properties = sum(all_properties),
     LADNM = first(LADNM),
-    Country_code  = first(Country_code),
-    RGNNM  = first(RGNNM),
+    Country_code = first(Country_code),
+    RGNNM = first(RGNNM)
   ) %>%
-  select( Admin_district_code, LADNM, RGNNM, Country_code, low_use, homes, all_properties, 
-          mean_price_low_use, mean_price_homes, mean_price_all_properties ) %>%
-  mutate(low_use_perc = low_use/all_properties,
-         price_ratio = mean_price_low_use/mean_price_all_properties)
+  select(Admin_district_code, LADNM, RGNNM, Country_code, low_use, homes, all_properties, 
+         mean_price_low_use, mean_price_homes, mean_price_all_properties) %>%
+  mutate(
+    low_use_perc = low_use / all_properties,
+    price_ratio = mean_price_low_use / mean_price_all_properties
+  ) %>%
+  left_join(lsoa_stats_LAD_level, by = 'Admin_district_code' ) %>%
+  left_join(UK_pop %>%
+  select('Admin_district_code' = Code,
+         'pop' = `All ages`) , by = 'Admin_district_code')
 
-write_csv(test, file.path(data_folder, 'weighted_price_LAD.csv'))
+# Save the processed data as a CSV file
+write_csv(weighted_price_LAD, file.path(data_folder, 'weighted_price_LAD.csv'))
+
+```
+
+
+```{r}
+test <- weighted_price_LAD %>%
+  filter(RGNNM=='Scotland')
+
+ggplot(weighted_price_LAD %>% filter(entropy>2.5)
+       , aes( x= entropy, y = low_use_perc)) + geom_point()
+
+```
+
+
+
+```{r}
+# the fraction of population for each country
+weighted_price_LAD %>% mutate('country'= stringr::str_sub(Admin_district_code, 1, 1)) %>%
+  group_by(country) %>%
+  summarise(pop = sum(pop))%>%
+  mutate(total_pop = c(56536419,5479900,3105410),
+         fract = pop/total_pop)
+
+```
+
+```{r}
+
+ggplot(weighted_price_LAD, aes(x = low_use_perc, y = price_ratio)) + geom_point()
 
 ```
 
@@ -154,25 +248,29 @@ write_csv(test, file.path(data_folder, 'weighted_price_LAD.csv'))
 
 A collection of a small number of errors
 ```{r}
-
+# Set the value for .x, which seems to represent a file identifier or region
 .x <- "OL"
 
-  print(.x)
-  ONSPD_file_path <- file.path(ONSPD_multi_files, paste0("ONSPD_NOV_2021_UK_", .x, ".csv"))
+# Print the identifier to the console
+print(.x)
 
+# Construct a file path to the corresponding ONSPD (Office for National Statistics Postcode Directory) CSV file
+ONSPD_file_path <- file.path(ONSPD_multi_files, paste0("ONSPD_NOV_2021_UK_", .x, ".csv"))
+
+# Read the ONSPD data from the constructed file path, select certain columns, and then mutate to get 'pcu' column
 ONSPD_df <- read_csv(ONSPD_file_path, col_type = rep('c', 7), 
-                     col_select = c('pcds', 'oslaua', 'osward','ctry', 'rgn', 'lsoa11', 'msoa11' )) %>%
+                     col_select = c('pcds', 'oslaua', 'osward', 'ctry', 'rgn', 'lsoa11', 'msoa11')) %>%
   mutate(pcu = str_replace_all(pcds, " ", ""))
 
-temp_df <- list.files(file.path(sales_prices, .x),  pattern = '.csv', full.names = TRUE) %>%
-  map_df(~{ 
-    
-   # test_file <- file.path(sales_prices, .x, paste0("sale_valid_property_id_expanded_year_2021_area_", .x ,"_part_00000.csv"))
-  
-    temp_df <- read_csv(.x, col_types = c('d', 'c', 'd', 'c', 'c'), 
-                    col_select = c("property_id"  , 'property_type', 'price_last', 'pcu', 'category') ) %>%
-  left_join(ONSPD_df, by = join_by(pcu) )
-    })
+# List CSV files within the corresponding directory in 'sales_prices'
+# and then read each file, joining it with the previously read ONSPD data
+temp_df <- list.files(file.path(sales_prices, .x), pattern = '.csv', full.names = TRUE) %>%
+  map_df(~{
+    # Read data from the CSV file, select certain columns, and then join with ONSPD data using 'pcu' as key
+    read_csv(.x, col_types = c('d', 'c', 'd', 'c', 'c'), 
+             col_select = c("property_id", 'property_type', 'price_last', 'pcu', 'category')) %>%
+    left_join(ONSPD_df, by = "pcu")
+  })
 
 ```
 
