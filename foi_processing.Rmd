@@ -257,11 +257,21 @@ This takes the all codes data frame filters to keep only low use codes, aggregat
 
 ```{r}
 
-ONSPD_df <-load_and_prepare_geo_data(file.path("/home/jonno/blue_green_towns/data/ONSPD/Data",
-                                    "ONSPD_NOV_2021_UK.csv"),
-                          documents_path)
+file_path <- file.path(data_folder, "lsoa_to_all_lookup.rds")
 
-write_rds(ONSPD_df, file.path(data_folder, "lsoa_to_all_lookup.rds"))
+# Check if the file exists
+if (file.exists(file_path)) {
+  # If the file exists, load it
+  ONSPD_df <- readRDS(file_path)
+} else {
+  # If the file doesn't exist, create it
+  ONSPD_df <- load_and_prepare_geo_data(file.path("/home/jonno/blue_green_towns/data/ONSPD/Data",
+                                                  "ONSPD_NOV_2021_UK.csv"),
+                                        documents_path)
+  
+  # Save the created dataset as an RDS file
+  write_rds(ONSPD_df, file_path)
+}
 ```
  
 ##Missing data
@@ -301,7 +311,6 @@ save_all_processed_fois(all_low_use_data, data_folder)
 
 ```{r}
 
-
 all_low_use_data <- all_codes %>%
   left_join( low_use_dict, by = 'code') %>%
   filter(low_use) %>%
@@ -315,7 +324,6 @@ all_low_use_data <- all_codes %>%
   left_join(., ONSPD_df %>%
   distinct(), by = 'lsoa11cd') %>%
   filter(complete.cases(.))
-
 
 ##
 ## The below saves all the data to a file for each LAD
